@@ -411,12 +411,22 @@ async def scheduled_daily_recipes(app: Application):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main():
-    import asyncio
+def build_app() -> Application:
+    async def post_init(application: Application):
+        await db.init_db()
+        scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+        scheduler.add_job(
+            scheduled_daily_recipes,
+            trigger="cron",
+            hour=8,
+            minute=0,
+            args=[application],
+        )
+        scheduler.start()
+        logger.info("Bot started")
 
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(post_init).build()
 
-    # Setup / onboarding conversation
     setup_conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
@@ -431,7 +441,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Add family member conversation
     member_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^➕ Добавить члена семьи$"), add_member_start),
@@ -445,7 +454,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Allergies conversation
     allergies_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^✏️ Изменить аллергии$"), set_allergies_start),
@@ -456,7 +464,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Dislikes conversation
     dislikes_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^✏️ Изменить нелюбимые продукты$"), set_dislikes_start),
@@ -467,7 +474,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Exclude today conversation
     exclude_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^🚫 Исключить продукт сегодня$"), exclude_today_start),
@@ -478,7 +484,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Fridge conversation
     fridge_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^🧊 Рецепты из холодильника$"), fridge_start),
@@ -503,21 +508,8 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^🗑 Удалить члена семьи$"), delete_member))
     app.add_handler(MessageHandler(filters.Regex("^🔙 Назад$"), back))
 
-    # Daily scheduler at 08:00
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(
-        scheduled_daily_recipes,
-        trigger="cron",
-        hour=8,
-        minute=0,
-        args=[app],
-    )
-    scheduler.start()
-
-    asyncio.get_event_loop().run_until_complete(db.init_db())
-    logger.info("Bot started")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    return app
 
 
 if __name__ == "__main__":
-    main()
+    build_app().run_polling(allowed_updates=Update.ALL_TYPES)
