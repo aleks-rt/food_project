@@ -1,8 +1,12 @@
+import os
 import anthropic
 from datetime import date
 
-client = anthropic.Anthropic()
 MODEL = "claude-opus-4-8"
+
+
+def _client() -> anthropic.Anthropic:
+    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 
 def _build_family_context(user: dict, members: list[dict]) -> str:
@@ -47,7 +51,7 @@ async def generate_daily_recipes(user: dict, members: list[dict], exclusions: li
 """
 
     full_response = ""
-    with client.messages.stream(
+    with _client().messages.stream(
         model=MODEL,
         max_tokens=4096,
         thinking={"type": "adaptive"},
@@ -87,7 +91,7 @@ async def generate_fridge_recipes(
 """
 
     full_response = ""
-    with client.messages.stream(
+    with _client().messages.stream(
         model=MODEL,
         max_tokens=4096,
         thinking={"type": "adaptive"},
