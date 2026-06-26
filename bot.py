@@ -55,7 +55,10 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 async def send_long(update: Update, text: str):
     MAX = 4000
     for i in range(0, len(text), MAX):
-        await update.message.reply_text(text[i:i + MAX], parse_mode="HTML")
+        try:
+            await update.message.reply_text(text[i:i + MAX], parse_mode="HTML")
+        except Exception:
+            await update.message.reply_text(text[i:i + MAX])
 
 
 async def require_profile(update: Update) -> bool:
