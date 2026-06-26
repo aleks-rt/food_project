@@ -3,11 +3,12 @@ import logging
 from datetime import date, datetime
 from dotenv import load_dotenv
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ConversationHandler,
     ContextTypes,
     filters,
@@ -43,6 +44,9 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
+
+# Keyboard shown inside the family section (text buttons replaced by inline, kept for fallback)
+
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -157,30 +161,59 @@ async def my_params(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Family members ────────────────────────────────────────────────────────────
 
+def _family_keyboard(members: list[dict]) -> InlineKeyboardMarkup:
+    buttons = []
+    for m in members:
+        buttons.append([
+            InlineKeyboardButton(
+                f"👤 {m['name']} · {m['age']} лет · {m['weight']} кг · {m['calories']} ккал",
+                callback_data=f"member_info_{m['id']}"
+            )
+        ])
+        buttons.append([
+            InlineKeyboardButton(f"🗑 Удалить {m['name']}", callback_data=f"del_member_{m['id']}")
+        ])
+    buttons.append([InlineKeyboardButton("➕ Добавить члена семьи", callback_data="add_member")])
+    return InlineKeyboardMarkup(buttons)
+
+
 async def family_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_profile(update):
         return
     uid = update.effective_user.id
     members = await db.get_family_members(uid)
 
-    kb = ReplyKeyboardMarkup(
-        [["➕ Добавить члена семьи"], ["🗑 Удалить члена семьи"], ["🔙 Назад"]],
-        resize_keyboard=True,
+    text = "👨‍👩‍👧 *Члены семьи*\n\nЗдесь отображаются все, для кого готовите." if members else "👨‍👩‍👧 *Члены семьи*\n\nСписок пуст. Добавьте первого члена семьи!"
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=_family_keyboard(members),
     )
-    if members:
-        text = "Члены вашей семьи:\n" + "\n".join(
-            f"[{m['id']}] {m['name']}: {m['age']} лет, {m['weight']} кг, {m['calories']} ккал"
-            for m in members
-        )
-    else:
-        text = "Список членов семьи пуст."
-    await update.message.reply_text(text, reply_markup=kb)
+
+
+async def family_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    data = query.data
+
+    if data.startswith("del_member_"):
+        member_id = int(data.split("_")[-1])
+        await db.delete_family_member(uid, member_id)
+        members = await db.get_family_members(uid)
+        text = "👨‍👩‍👧 *Члены семьи*\n\nЗдесь отображаются все, для кого готовите." if members else "👨‍👩‍👧 *Члены семьи*\n\nСписок пуст. Добавьте первого члена семьи!"
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=_family_keyboard(members))
+
+    elif data == "add_member":
+        await query.edit_message_text("Введите имя нового члена семьи:", reply_markup=None)
+        context.user_data["adding_member_inline"] = True
+        return MEMBER_NAME
 
 
 async def add_member_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_profile(update):
         return
-    await update.message.reply_text("Имя члена семьи?")
+    await update.message.reply_text("Имя нового члена семьи?")
     return MEMBER_NAME
 
 
@@ -220,25 +253,15 @@ async def member_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     d = context.user_data
     await db.add_family_member(uid, d["m_name"], d["m_age"], d["m_weight"], cal)
+    members = await db.get_family_members(uid)
     await update.message.reply_text(
-        f"✅ {d['m_name']} добавлен(а) в список!",
-        reply_markup=MAIN_KEYBOARD,
+        f"✅ {d['m_name']} добавлен(а)!\n\n👨‍👩‍👧 *Члены семьи*",
+        parse_mode="Markdown",
+        reply_markup=_family_keyboard(members),
     )
     return ConversationHandler.END
 
 
-async def delete_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    members = await db.get_family_members(uid)
-    if not members:
-        await update.message.reply_text("Нет членов семьи для удаления.", reply_markup=MAIN_KEYBOARD)
-        return
-
-    text = "Напишите ID члена семьи для удаления:\n" + "\n".join(
-        f"[{m['id']}] {m['name']}" for m in members
-    )
-    await update.message.reply_text(text)
-    context.user_data["awaiting_delete_id"] = True
 
 
 # ── Allergies & dislikes ──────────────────────────────────────────────────────
@@ -444,6 +467,7 @@ def build_app() -> Application:
     member_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^➕ Добавить члена семьи$"), add_member_start),
+            CallbackQueryHandler(family_callback, pattern="^add_member$"),
         ],
         states={
             MEMBER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, member_name)],
@@ -501,11 +525,11 @@ def build_app() -> Application:
     app.add_handler(exclude_conv)
     app.add_handler(fridge_conv)
 
+    app.add_handler(CallbackQueryHandler(family_callback, pattern="^del_member_"))
     app.add_handler(MessageHandler(filters.Regex("^🍽 Рецепты на сегодня$"), daily_recipes))
     app.add_handler(MessageHandler(filters.Regex("^👨‍👩‍👧 Члены семьи$"), family_menu))
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Мои параметры$"), my_params))
     app.add_handler(MessageHandler(filters.Regex("^📋 Аллергии и нелюбимые$"), allergies_menu))
-    app.add_handler(MessageHandler(filters.Regex("^🗑 Удалить члена семьи$"), delete_member))
     app.add_handler(MessageHandler(filters.Regex("^🔙 Назад$"), back))
 
     return app
