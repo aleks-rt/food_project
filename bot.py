@@ -364,8 +364,8 @@ async def daily_recipes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = await ai.generate_daily_recipes(user, members, exclusions)
         await send_long(update, result)
     except Exception as e:
-        logger.error(f"Error generating recipes: {e}")
-        await update.message.reply_text("Произошла ошибка при генерации рецептов. Попробуйте позже.")
+        logger.error(f"Error generating recipes: {e}", exc_info=True)
+        await update.message.reply_text(f"Ошибка: {e}")
 
 
 # ── Fridge recipes ────────────────────────────────────────────────────────────
