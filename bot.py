@@ -34,12 +34,13 @@ TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
     SET_ALLERGIES, SET_DISLIKES,
     EXCLUDE_TODAY,
     FRIDGE_INPUT,
-) = range(12)
+    EDIT_NAME, EDIT_AGE, EDIT_WEIGHT, EDIT_CALORIES,
+) = range(16)
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["🍽 Рецепты на сегодня", "🧊 Рецепты из холодильника"],
-        ["👨‍👩‍👧 Члены семьи", "⚙️ Мои параметры"],
+        ["👨‍👩‍👧 Члены семьи", "✏️ Изменить параметры"],
         ["🚫 Исключить продукт сегодня", "📋 Аллергии и нелюбимые"],
     ],
     resize_keyboard=True,
@@ -138,25 +139,126 @@ async def setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SETUP_NAME
 
 
-# ── My params ────────────────────────────────────────────────────────────────
+# ── Edit params ───────────────────────────────────────────────────────────────
 
-async def my_params(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def _edit_params_keyboard(user: dict, members: list[dict]) -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(
+        f"👑 {user['name']} · {user['age']} лет · {user['weight']} кг · {user['calories']} ккал",
+        callback_data="edit_self"
+    )]]
+    for m in members:
+        buttons.append([InlineKeyboardButton(
+            f"👤 {m['name']} · {m['age']} лет · {m['weight']} кг · {m['calories']} ккал",
+            callback_data=f"edit_member_{m['id']}"
+        )])
+    return InlineKeyboardMarkup(buttons)
+
+
+async def edit_params_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_profile(update):
         return
     uid = update.effective_user.id
     user = await db.get_user(uid)
     members = await db.get_family_members(uid)
-    text = (
-        f"👤 *{user['name']}*\n"
-        f"Возраст: {user['age']} лет | Вес: {user['weight']} кг | Калории: {user['calories']} ккал\n"
-        f"Аллергии: {', '.join(user['allergies']) or 'нет'}\n"
-        f"Нелюбимые: {', '.join(user['dislikes']) or 'нет'}\n"
+    await update.message.reply_text(
+        "✏️ *Изменить параметры*\n\nВыберите, чьи параметры хотите изменить:",
+        parse_mode="Markdown",
+        reply_markup=_edit_params_keyboard(user, members),
     )
-    if members:
-        text += "\n👨‍👩‍👧 *Члены семьи:*\n"
-        for m in members:
-            text += f"• {m['name']}: {m['age']} лет, {m['weight']} кг, {m['calories']} ккал\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def edit_params_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "edit_self":
+        context.user_data["editing_member_id"] = "self"
+        await query.edit_message_text("Введите новое имя (или «-» чтобы не менять):")
+    elif data.startswith("edit_member_"):
+        member_id = int(data.split("_")[-1])
+        context.user_data["editing_member_id"] = member_id
+        await query.edit_message_text("Введите новое имя (или «-» чтобы не менять):")
+    return EDIT_NAME
+
+
+async def edit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    context.user_data["edit_name"] = None if val == "-" else val
+    await update.message.reply_text("Возраст (или «-»):")
+    return EDIT_AGE
+
+
+async def edit_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    if val != "-":
+        try:
+            context.user_data["edit_age"] = int(val)
+        except ValueError:
+            await update.message.reply_text("Введите число или «-»:")
+            return EDIT_AGE
+    else:
+        context.user_data["edit_age"] = None
+    await update.message.reply_text("Вес в кг (или «-»):")
+    return EDIT_WEIGHT
+
+
+async def edit_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip().replace(",", ".")
+    if val != "-":
+        try:
+            context.user_data["edit_weight"] = float(val)
+        except ValueError:
+            await update.message.reply_text("Введите число или «-»:")
+            return EDIT_WEIGHT
+    else:
+        context.user_data["edit_weight"] = None
+    await update.message.reply_text("Калории в день (или «-»):")
+    return EDIT_CALORIES
+
+
+async def edit_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    if val != "-":
+        try:
+            context.user_data["edit_calories"] = int(val)
+        except ValueError:
+            await update.message.reply_text("Введите число или «-»:")
+            return EDIT_CALORIES
+    else:
+        context.user_data["edit_calories"] = None
+
+    uid = update.effective_user.id
+    d = context.user_data
+    mid = d.get("editing_member_id")
+
+    if mid == "self":
+        current = await db.get_user(uid)
+        await db.upsert_user(
+            uid,
+            d["edit_name"] or current["name"],
+            d["edit_age"] or current["age"],
+            d["edit_weight"] or current["weight"],
+            d["edit_calories"] or current["calories"],
+        )
+    else:
+        members = await db.get_family_members(uid)
+        current = next(m for m in members if m["id"] == mid)
+        await db.update_family_member(
+            mid,
+            d["edit_name"] or current["name"],
+            d["edit_age"] or current["age"],
+            d["edit_weight"] or current["weight"],
+            d["edit_calories"] or current["calories"],
+        )
+
+    user = await db.get_user(uid)
+    members = await db.get_family_members(uid)
+    await update.message.reply_text(
+        "✅ Параметры обновлены!\n\nВыберите ещё кого-то или вернитесь в меню:",
+        reply_markup=_edit_params_keyboard(user, members),
+    )
+    return ConversationHandler.END
 
 
 # ── Family members ────────────────────────────────────────────────────────────
@@ -538,10 +640,22 @@ def build_app() -> Application:
     app.add_handler(exclude_conv)
     app.add_handler(fridge_conv)
 
+    edit_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_params_callback, pattern="^edit_(self|member_\\d+)$")],
+        states={
+            EDIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name)],
+            EDIT_AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_age)],
+            EDIT_WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_weight)],
+            EDIT_CALORIES: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_calories)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(edit_conv)
     app.add_handler(CallbackQueryHandler(family_callback, pattern="^del_member_"))
     app.add_handler(MessageHandler(filters.Regex("^🍽 Рецепты на сегодня$"), daily_recipes))
     app.add_handler(MessageHandler(filters.Regex("^👨‍👩‍👧 Члены семьи$"), family_menu))
-    app.add_handler(MessageHandler(filters.Regex("^⚙️ Мои параметры$"), my_params))
+    app.add_handler(MessageHandler(filters.Regex("^✏️ Изменить параметры$"), edit_params_menu))
     app.add_handler(MessageHandler(filters.Regex("^📋 Аллергии и нелюбимые$"), allergies_menu))
     app.add_handler(MessageHandler(filters.Regex("^🔙 Назад$"), back))
 

@@ -98,6 +98,14 @@ async def add_family_member(user_id: int, name: str, age: int, weight: float, ca
         await db.commit()
 
 
+async def update_family_member(member_id: int, name: str, age: int, weight: float, calories: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            UPDATE family_members SET name=?, age=?, weight=?, calories=? WHERE id=?
+        """, (name, age, weight, calories, member_id))
+        await db.commit()
+
+
 async def delete_family_member(user_id: int, member_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
