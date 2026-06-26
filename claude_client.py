@@ -2,7 +2,7 @@ import os
 import anthropic
 from datetime import date
 
-MODEL = "claude-opus-4-8"
+MODEL = "claude-sonnet-4-6"
 
 
 def _client() -> anthropic.Anthropic:
@@ -54,7 +54,7 @@ async def generate_daily_recipes(user: dict, members: list[dict], exclusions: li
     with _client().messages.stream(
         model=MODEL,
         max_tokens=4096,
-        thinking={"type": "adaptive"},
+
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
         for text in stream.text_stream:
@@ -94,7 +94,7 @@ async def generate_fridge_recipes(
     with _client().messages.stream(
         model=MODEL,
         max_tokens=4096,
-        thinking={"type": "adaptive"},
+
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
         for text in stream.text_stream:
